@@ -463,17 +463,6 @@
     </div>
     <div class="card" bind:this={barsEl} style="height:520px;margin-top:10px;"></div>
   </section>
-
-  <!-- Explore -->
-  <section class="card" style="margin-top:12px;">
-    <div class="flex">
-      <div style="flex:1;">
-        <label for="nameAdder">Find/add a name</label>
-        <input id="nameAdder" placeholder="Type and press Enter…" on:keydown={addName} />
-        <div class="subtle" style="margin-top:6px;">{pick.join(', ')}</div>
-      </div>
-    </div>
-  </section>
 </div>
 
 <style>
