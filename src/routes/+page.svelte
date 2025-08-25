@@ -2,15 +2,14 @@
   import { onMount } from 'svelte';
   import Papa from 'papaparse';
 
-  // CSVs
-  const URL = '/dog_name_trends_nyc.csv';   // Year, Name, Count  (for trends)
-  const ZIP_URL = '/dog_names_cleaned.csv'; // raw licenses with ZipCode + Year (for geography)
+  // One CSV for everything
+  const CLEAN_URL = '/dog_names_cleaned.csv';
 
   // status
   let errorMsg = '';
 
   // -------------- base data (names + yearly totals) --------------
-  let rows = [];          // {year, name, count}
+  let rows = [];          // aggregated {year, name, count} built from cleaned CSV
   let years = [];
   let names = [];
   let totals = new Map(); // year -> total count
@@ -39,18 +38,8 @@
   ];
   let activeEvents = new Set(EVENTS.map(e => e.id));
 
-  // ---------- helpers (names CSV) ----------
+  // ---------- helpers ----------
   const BAD = new Set(['UNKNOWN','NAME NOT PROVIDED']);
-  const tidy = (arr) =>
-    arr.map(r => ({
-      year: +((r.Year ?? r.year) || ''),
-      name: (r.Name ?? r.name ?? '').toString().trim().toUpperCase(),
-      count: +((r.Count ?? r.count) || '')
-    })).filter(r =>
-      Number.isFinite(r.year) && r.year > 0 &&
-      r.name && !BAD.has(r.name) &&
-      Number.isFinite(r.count) && r.count >= 0
-    );
 
   function defaultPick(){
     const byName = new Map();
@@ -222,8 +211,9 @@
     'Other': '#a3a3a3'
   };
 
-  // cleaned license rows for geography
-  let zipRows = []; // {year:number, zip:number}
+  // license rows parsed from cleaned CSV
+  let licenseRows = [];  // {year, name, zip}
+  let zipRows = [];      // {year, zip}
   let zipTotalsAll = new Map();          // zip -> total count
   let zipTotalsByYear = new Map();       // year -> Map(zip -> count)
   let zipTreeEl;                         // container for treemap
@@ -244,21 +234,11 @@
     return 'Other';
   }
 
-  // robust parser for ZIP CSV (auto-detects columns + parses dates)
-  function tidyZip(arr){
+  // -------- Parse the single cleaned CSV into {year, name, zip} licenses
+  function tidyCleaned(arr){
     const out = [];
     for (const r of arr){
       const lower = Object.fromEntries(Object.entries(r).map(([k,v])=>[k.toLowerCase(), v]));
-      // ZIP candidate
-      let zipStr = '';
-      for (const k of Object.keys(lower)){
-        if (k.includes('zip') || k.includes('post code') || k.includes('postcode')){
-          const m = String(lower[k] ?? '').match(/\d{5}/);
-          if (m){ zipStr = m[0]; break; }
-        }
-      }
-      const zip = +zipStr;
-      if (!Number.isFinite(zip)) continue;
 
       // YEAR
       let year = null;
@@ -277,22 +257,63 @@
           }
         }
       }
-      if (!Number.isFinite(year)) continue;
-      if (zip < 10000 || zip > 11699) continue; // plausible NYC
 
-      out.push({ year, zip });
+      // ZIP
+      let zip = null;
+      for (const k of Object.keys(lower)){
+        if (k.includes('zip') || k.includes('post code') || k.includes('postcode')){
+          const m = String(lower[k] ?? '').match(/\d{5}/);
+          if (m){ zip = +m[0]; break; }
+        }
+      }
+
+      // NAME
+      let name = '';
+      const nameKeysPriority = [
+        'animal name','pet name','dog name','name'
+      ];
+      for (const key of nameKeysPriority){
+        if (lower[key] != null){ name = String(lower[key]).trim(); break; }
+      }
+      if (!name){
+        for (const [k,val] of Object.entries(lower)){
+          if (k.includes('name') && !k.includes('owner') && !k.includes('applicant') && !k.includes('licensee')){
+            name = String(val ?? '').trim(); break;
+          }
+        }
+      }
+
+      // validate / normalize
+      if (name) name = name.toUpperCase();
+      if (!Number.isFinite(year) || year <= 0) continue;
+      if (!name || BAD.has(name)) continue;
+      if (!Number.isFinite(zip)) continue; // we rely on zip for geo AND filter to NYC next
+      if (zip < 10000 || zip > 11699) continue; // keep plausible NYC
+
+      out.push({ year, name, zip });
     }
     return out;
   }
 
+  // Build aggregated name rows (year, name, count) from licenseRows
+  function buildNameAgg(){
+    const byYN = new Map(); // `${year}|${name}` -> count
+    for (const r of licenseRows){
+      const key = `${r.year}|${r.name}`;
+      byYN.set(key, (byYN.get(key) || 0) + 1);
+    }
+    rows = Array.from(byYN.entries()).map(([key,count])=>{
+      const [yStr, name] = key.split('|');
+      return { year: +yStr, name, count };
+    }).sort((a,b)=> (a.year-b.year) || (a.name<b.name?-1:1));
+  }
+
+  // Build ZIP aggregates
   function buildZipAgg(){
     zipTotalsAll = new Map();
     zipTotalsByYear = new Map();
-
     for (const r of zipRows){
-      // overall zip
       zipTotalsAll.set(r.zip, (zipTotalsAll.get(r.zip) || 0) + 1);
-      // by year -> zip
       const m = zipTotalsByYear.get(r.year) || new Map();
       m.set(r.zip, (m.get(r.zip) || 0) + 1);
       zipTotalsByYear.set(r.year, m);
@@ -330,12 +351,16 @@
     try{
       Plotly = (await import('plotly.js-dist-min')).default;
 
-      // names/time-series CSV
-      const raw1 = tidy(await parseCsvText(await fetchCsvText(URL)));
-      rows = raw1;
-      if (!rows.length) errorMsg = (errorMsg ? errorMsg + ' | ' : '') + 'Trends CSV loaded but had no rows after cleaning.';
+      // Parse the single cleaned CSV
+      const licenses = tidyCleaned(await parseCsvText(await fetchCsvText(CLEAN_URL)));
+      if (!licenses.length){
+        errorMsg = 'Could not find usable (Year, Name, ZIP) in dog_names_cleaned.csv.';
+      }
+      licenseRows = licenses;
 
-      years = Array.from(new Set(rows.map(r=>r.year))).sort((a,b)=>a-b);
+      // Build name aggregates for trends/leaderboard
+      buildNameAgg();
+      years = Array.from(new Set(licenseRows.map(r=>r.year))).sort((a,b)=>a-b);
       buildTotals();
       if (years.length){
         barYear = years.at(-1);
@@ -344,19 +369,12 @@
         drawBars();
       }
 
-      // ZIP/geo CSV (raw licenses)
-      const raw2 = tidyZip(await parseCsvText(await fetchCsvText(ZIP_URL)));
-      zipRows = raw2.filter(r => r.zip >= 10000 && r.zip <= 11699);
-      if (!zipRows.length){
-        errorMsg = (errorMsg ? errorMsg + ' | ' : '') + 'ZIP CSV parsed 0 usable rows (couldn’t find ZIP + Year).';
-      }
-
+      // Build ZIP aggregates for treemap
+      zipRows = licenseRows.map(({year,zip})=>({year,zip}));
       buildZipAgg();
-      const setYears = Array.from(new Set(zipRows.map(d=>d.year))).sort((a,b)=>a-b);
-      zipYears = setYears;
+      zipYears = Array.from(new Set(zipRows.map(d=>d.year))).sort((a,b)=>a-b);
       zipYear = zipYears.at(-1) ?? null;
 
-      // initial treemap
       drawZipTreemap();
 
     }catch(e){
@@ -369,17 +387,13 @@
   // keep trend in sync with the Year Leaderboard selection
   $: if (Plotly && rows.length && barYear != null) drawLine();
 
-  // IMPORTANT: make treemap react to control changes
-  $: {
-    // reference control state so Svelte tracks these as dependencies
-    void zipOverall; void zipYear; void zipTopN;
-    if (Plotly && zipTreeEl) drawZipTreemap();
-  }
+  // treemap reacts to control changes
+  $: { void zipOverall; void zipYear; void zipTopN; if (Plotly && zipTreeEl) drawZipTreemap(); }
 
   // guideline control for trend line
   function setCursorLine(y){ cursorYear = y; drawLine(); }
 
-  // autoplay for leaderboard — now updates both bars and line
+  // autoplay for leaderboard — updates both bars and line
   function playBars(){
     stopBars();
     if (!years.length) return;
@@ -486,7 +500,7 @@
     {/if}
   </section>
 
-  <!-- ZIP / Neighborhoods — TREEMAP ONLY -->
+  <!-- ZIP / Neighborhoods — TREEMAP Y -->
   <section class="card" style="margin-top:16px;">
     <h3 style="margin:0 0 8px;">Where are the dogs? (ZIPs & Boroughs)</h3>
 
@@ -591,110 +605,100 @@
 </div>
 
 <style>
-  :global(:root){ --maxw: 1100px; --pad: 12px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; 
-  }
-  :global(body){ 
-    margin:0;
-     color:#111; 
+  :global(:root){ --maxw: 1100px; --pad: 12px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  :global(body){ margin:0;
+     color:#111;
      background:#fff; 
     }
-  .container{ 
-    max-width:var(--maxw); 
-    margin:0 auto; 
+  .container{ max-width:var(--maxw);
+     margin:0 auto; 
     padding:24px var(--pad); 
   }
   h1{ 
-    font-size:1.6rem; 
-    margin:0 0 8px;
-   }
+    font-size:1.6rem;
+     margin:0 0 8px; 
+    }
   .card{ 
     background:#fff; 
-    border:1px solid #eee;
-    border-radius:12px; 
-    padding:16px; 
+    border:1px solid #eee; 
+    border-radius:12px; padding:16px;
     box-shadow:0 1px 2px rgba(0,0,0,.04); 
   }
   .warn{ 
     background:#fff5f5; 
-    border-color:#f0cccc; 
-  }
+    border-color:#f0cccc; }
   input,button{ 
-    font-size:14px; 
-  }
+    font-size:14px;
+   }
   input{ 
-    min-height:36px; 
+    min-height:36px;
     padding:6px 8px; 
     width:100%; 
-    box-sizing:border-box; }
+    box-sizing:border-box; 
+  }
   button{ 
-    padding:8px 12px;
+    padding:8px 12px; 
     border-radius:10px; 
     border:1px solid #ddd; 
     background:#fafafa; 
-    cursor:pointer; 
-  }
+    cursor:pointer; }
   button:hover{ 
     background:#f0f0f0; 
   }
-  .mono{ font-family: 
-    ui-monospace, Menlo, Consolas, monospace; 
+  .mono{ 
+    font-family: ui-monospace, Menlo, Consolas, monospace; 
     color:#444; 
-    margin-top:4px; 
-  }
-  .subtle{ 
-    color:#555; 
+    margin-top:4px; }
+  .subtle{ color:#555; 
     font-size:.9rem; 
   }
-  .ctrl{ margin-top:10px; }
+  .ctrl{ margin-top:10px;
+   }
   .chip{ 
     background:#f2f4f7; 
     border:1px solid #e5e7eb; 
-    border-radius:999px; 
+    border-radius:999px;
     padding:2px 10px; 
     font-size:12px; 
     letter-spacing:.2px; 
     color:var(--c); 
-    cursor:pointer; 
-  }
-  .chip[aria-pressed="true"]{ 
-    background:#eef2ff; 
-    border-color:#c7d2fe; }
+    cursor:pointer; }
+  .chip[aria-pressed="true"]{ background:#eef2ff; border-color:#c7d2fe; }
 
   .legendBoro{ 
-    display:flex; 
-    gap:14px; 
+    display:flex; gap:14px;
     align-items:center; 
     color:#444; 
-    margin-top:10px; 
-    flex-wrap:wrap; 
-  }
-  .dot{ width:10px; 
-    height:10px; 
+    flex-wrap:wrap; }
+  .dot{ 
+    width:10px; 
+    height:10px;
     border-radius:999px; 
     background:var(--c); 
-    display:inline-block;
-     margin-right:6px; }
+    display:inline-block; 
+    margin-right:6px; 
+  }
 
   /* Podium (names) */
   .podium{ 
     display:grid; 
-    grid-template-columns: repeat(3, 1fr); 
-    gap:14px; align-items:end;
-     margin-top:10px; 
+    grid-template-columns: repeat(3, 1fr);
+    gap:14px; 
+    align-items:end; 
+    margin-top:10px; }
+  .place{
+     position:relative; 
+     text-align:center; 
+     padding:16px 10px 12px; 
+     border-radius:14px; border:1px solid #eee; 
+     box-shadow:0 1px 2px rgba(0,0,0,.04); 
+     overflow:hidden; 
     }
-  .place{ 
-    position:relative; 
-    text-align:center; 
-    padding:16px 10px 12px; 
-    border-radius:14px;
-    border:1px solid #eee; 
-    box-shadow:0 1px 2px rgba(0,0,0,.04); 
-    overflow:hidden; 
-  }
   .place::after{ 
     content:''; 
     position:absolute; 
-    inset:0; background: linear-gradient(180deg, color-mix(in oklab, var(--c) 12%, #fff) 0%, #fff 60%); 
+    inset:0; 
+    background: linear-gradient(180deg, color-mix(in oklab, var(--c) 12%, #fff) 0%, #fff 60%); 
     opacity:.55; 
     pointer-events:none; 
   }
@@ -709,7 +713,8 @@
     transform:translateX(-50%); 
     z-index:2; 
   }
-  .spark{ position:absolute; 
+  .spark{ 
+    position:absolute; 
     inset:4px 4px auto 4px; 
     height:54px; 
     width:140px; 
@@ -717,20 +722,23 @@
     z-index:1; 
   }
   .spark path{ 
-    fill:none; stroke:var(--c); 
-    stroke-width:2;
-   }
+    fill:none; 
+    stroke:var(--c); 
+    stroke-width:2; 
+  }
   .dog{ 
     font-size:46px; 
     margin-top:6px; 
     position:relative; 
     z-index:2; 
   }
-  .rank{ font-weight:700;
-     margin-top:6px; 
-     letter-spacing:.3px; 
-     position:relative;
-      z-index:2; }
+  .rank{ 
+    font-weight:700; 
+    margin-top:6px; 
+    letter-spacing:.3px; 
+    position:relative; 
+    z-index:2; 
+  }
   .pname{ 
     font-weight:700; 
     margin-top:2px; 
@@ -747,32 +755,28 @@
 
   .bench{ 
     display:grid; 
-    grid-template-columns: repeat(auto-fill,minmax(220px,1fr));
+    grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); 
     gap:10px; 
-    margin-top:12px; 
-    }
-  .benchItem{ 
-    display:flex; 
-    align-items:center; 
+    margin-top:12px; }
+  .benchItem{ display:flex; 
+    align-items:center;
     gap:10px; 
-    padding:10px; 
-    border:1px dashed #eee; 
+    padding:10px; border:1px dashed #eee; 
     border-radius:10px; 
   }
-  .cry{ font-size:22px; }
+  .cry{ font-size:22px; 
+  }
   .bname{ 
-    font-weight:600;
-     color:var(--c);
-    }
+    font-weight:600; 
+    color:var(--c);
+   }
   .bcount{ 
     margin-left:auto; 
     color:#555; 
     font-variant-numeric: tabular-nums; }
 
   .flex{ 
-    display:flex;
-    gap:12px; 
+    display:flex; gap:12px; 
     align-items:flex-end; 
-    flex-wrap:wrap; 
-    }
+    flex-wrap:wrap; }
 </style>
