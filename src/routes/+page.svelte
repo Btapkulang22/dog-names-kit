@@ -1,64 +1,54 @@
 <script>
   import { onMount } from 'svelte';
   import Papa from 'papaparse';
-
   // One CSV for everything
   const CLEAN_URL = '/dog_names_cleaned.csv';
-
   // status
   let errorMsg = '';
-
   // -------------- base data (names + yearly totals) --------------
-  let rows = [];          // aggregated {year, name, count} built from cleaned CSV
+  let rows = []; // aggregated {year, name, count} built from cleaned CSV
   let years = [];
   let names = [];
   let totals = new Map(); // year -> total count
-
   // charts
   let Plotly = null;
+  let Chart = null;
   let lineEl;
   let barsEl;
-
+  let breedEl;
   // interaction (names)
   let pick = [];
   let topN = 10;
-  let barYear = null;    // controls podium + bars
+  let barYear = null; // controls podium + bars
   let timer = null;
   let cursorYear = null; // guideline on trend
-
   // toggles
-  let showTotal = true;        // draw total licenses line
-  let showEvents = true;       // draw event bands/pins
-
+  let showTotal = true; // draw total licenses line
+  let showEvents = true; // draw event bands/pins
   const EVENTS = [
-    { id:'covid',    type:'band', from:2020, to:2021, color:'rgba(0,0,0,.06)', emoji:'🦠', label:'Pandemic' },
-    { id:'lockdown', type:'pin',  year:2020, color:'#999', emoji:'🏠', label:'Stay-at-home' },
-    { id:'adopt',    type:'pin',  year:2020, color:'#999', emoji:'🐾', label:'Adoption spike' },
-    { id:'reopen',   type:'pin',  year:2021, color:'#999', emoji:'🌳', label:'Parks reopen' },
+    { id:'covid', type:'band', from:2020, to:2021, color:'rgba(0,0,0,.06)', emoji:'🦠', label:'Pandemic' },
+    { id:'lockdown', type:'pin', year:2020, color:'#999', emoji:'🏠', label:'Stay-at-home' },
+    { id:'adopt', type:'pin', year:2020, color:'#999', emoji:'🐾', label:'Adoption spike' },
+    { id:'reopen', type:'pin', year:2021, color:'#999', emoji:'🌳', label:'Parks reopen' },
   ];
   let activeEvents = new Set(EVENTS.map(e => e.id));
-
   // ---------- helpers ----------
   const BAD = new Set(['UNKNOWN','NAME NOT PROVIDED']);
-
   function defaultPick(){
     const byName = new Map();
     for (const r of rows) byName.set(r.name, (byName.get(r.name)||0) + r.count);
     names = Array.from(byName.entries()).sort((a,b)=>b[1]-a[1]).map(d=>d[0]);
-    pick = names.slice(0,4);  // always show top 4 overall
+    pick = names.slice(0,4); // always show top 4 overall
   }
-
   function colorFor(name){
     let h = 0;
     for (let i=0;i<name.length;i++) h = (h*31 + name.charCodeAt(i)) % 360;
     return `hsl(${h},70%,55%)`;
   }
-
   function seriesCounts(name){
     const map = new Map(rows.filter(r=>r.name===name).map(r=>[r.year,r.count]));
     return years.map(y => map.get(y) ?? 0);
   }
-
   function topKForYear(year, k=3){
     const pool = rows.filter(r=>r.year===year);
     const by = new Map();
@@ -66,7 +56,6 @@
     return Array.from(by.entries()).sort((a,b)=>b[1]-a[1]).slice(0,k)
                 .map(([name,count],i)=>({rank:i+1, name, count}));
   }
-
   function topNameForYear(year, withinPick=false){
     if (!year) return null;
     const pool = rows.filter(r=>r.year===year);
@@ -79,7 +68,6 @@
     const best = Array.from(by.entries()).sort((a,b)=>b[1]-a[1])[0];
     return best ? {name: best[0], count: best[1]} : null;
   }
-
   // tiny sparkline path (used in leaderboard cards)
   function sparkPath(values, w=140, h=54, pad=6){
     const vmax = Math.max(1, ...values);
@@ -91,7 +79,6 @@
     }
     return d;
   }
-
   function biggestYoYGainer(year) {
     const idx = years.indexOf(year);
     if (idx < 1) return null;
@@ -105,13 +92,10 @@
     }
     return best;
   }
-
   // ---------- TREND (line) ----------
   function drawLine(){
     if (!rows.length || !lineEl || !Plotly) return;
-
     const traces = [];
-
     if (showTotal && years.length && totals.size) {
       traces.push({
         x: years,
@@ -119,11 +103,10 @@
         type: 'scatter',
         mode: 'lines',
         name: 'TOTAL LICENSES',
-        line: { color: 'rgba(80,80,80,.25)', width: 3 },
+        line: { color: 'rgba(80,80,0,.25)', width: 3 },
         hovertemplate: 'Total: %{y} in %{x}<extra></extra>'
       });
     }
-
     for (const nm of pick){
       const yvals = seriesCounts(nm);
       const col = colorFor(nm);
@@ -133,10 +116,8 @@
         hovertemplate:`${nm}: %{y} in %{x}<extra></extra>`
       });
     }
-
     const shapes = [];
     const ann = [];
-
     if (showEvents) {
       for (const ev of EVENTS) {
         if (!activeEvents.has(ev.id)) continue;
@@ -150,11 +131,9 @@
         }
       }
     }
-
     if (cursorYear != null){
       shapes.push({ type:'line', xref:'x', yref:'paper', x0:cursorYear, x1:cursorYear, y0:0, y1:1, line:{dash:'dot', width:1} });
     }
-
     const crownYear = (cursorYear ?? barYear);
     if (crownYear != null){
       const best = topNameForYear(crownYear, false);
@@ -177,14 +156,12 @@
           font:{size:12, color:col}, arrowcolor:col });
       }
     }
-
     Plotly.newPlot(lineEl, traces, {
       xaxis:{ title:'Year' },
       yaxis:{ title:'Licenses (count)', rangemode:'tozero' },
       shapes, annotations:ann, margin:{l:60,r:20,t:20,b:50}
     }, {displayModeBar:false});
   }
-
   // ---------- BARS (Top-N by year) ----------
   function drawBars(){
     if (!rows.length || !barsEl || !Plotly || !barYear) return;
@@ -200,30 +177,26 @@
       hovertemplate:'%{y}: %{x}<extra></extra>'
     }], { xaxis:{title:'Licenses (count)', rangemode:'tozero'}, margin:{l:140,r:20,t:20,b:40} }, {displayModeBar:false});
   }
-
   // ---------- ZIP / NEIGHBORHOOD SECTION (TREEMAP ONLY) ----------
   const BORO_COLORS = {
     'Manhattan': '#84cc16',
-    'Brooklyn':  '#60a5fa',
-    'Queens':    '#f472b6',
-    'Bronx':     '#f59e0b',
+    'Brooklyn': '#60a5fa',
+    'Queens': '#f472b6',
+    'Bronx': '#f59e0b',
     'Staten Island': '#34d399',
     'Other': '#a3a3a3'
   };
-
   // license rows parsed from cleaned CSV
-  let licenseRows = [];  // {year, name, zip}
-  let zipRows = [];      // {year, zip}
-  let zipTotalsAll = new Map();          // zip -> total count
-  let zipTotalsByYear = new Map();       // year -> Map(zip -> count)
-  let zipTreeEl;                         // container for treemap
-
+  let licenseRows = []; // {year, name, zip, breed, gender}
+  let zipRows = []; // {year, zip}
+  let zipTotalsAll = new Map(); // zip -> total count
+  let zipTotalsByYear = new Map(); // year -> Map(zip -> count)
+  let zipTreeEl; // container for treemap
   // UI state for ZIPs
-  let zipTopN = 10;       // top ZIPs per borough to show inside treemap
-  let zipYear = null;     // null = overall; otherwise specific year
-  let zipOverall = true;  // toggle overall vs per-year
-  let zipYears = [];      // distinct years present in zipRows
-
+  let zipTopN = 10; // top ZIPs per borough to show inside treemap
+  let zipYear = null; // null = overall; otherwise specific year
+  let zipOverall = true; // toggle overall vs per-year
+  let zipYears = []; // distinct years present in zipRows
   function boroughForZip(z){
     const p = Math.floor(z / 100);
     if (p === 112) return 'Brooklyn';
@@ -233,13 +206,11 @@
     if (p === 100 || p === 101 || p === 102) return 'Manhattan';
     return 'Other';
   }
-
-  // -------- Parse the single cleaned CSV into {year, name, zip} licenses
+  // -------- Parse the single cleaned CSV into {year, name, zip, breed, gender} licenses
   function tidyCleaned(arr){
     const out = [];
     for (const r of arr){
       const lower = Object.fromEntries(Object.entries(r).map(([k,v])=>[k.toLowerCase(), v]));
-
       // YEAR
       let year = null;
       for (const key of ['year','extract year','extract_year']){
@@ -251,13 +222,12 @@
         for (const [k,val] of Object.entries(lower)){
           if (k.includes('date') || k.includes('issued') || k.includes('create')){
             const m = String(val ?? '').match(/\d{4}/);
-            if (m){ const y = +m[0]; if (y>=1990 && y<=2100){ year = y; break; } }
+            if (m){ const m = +m[0]; if (m>=1990 && m<=2100){ year = m; break; } }
             const d = new Date(val);
             if (!isNaN(d.getTime())){ const y = d.getFullYear(); if (y>=1990 && y<=2100){ year = y; break; } }
           }
         }
       }
-
       // ZIP
       let zip = null;
       for (const k of Object.keys(lower)){
@@ -266,7 +236,6 @@
           if (m){ zip = +m[0]; break; }
         }
       }
-
       // NAME
       let name = '';
       const nameKeysPriority = [
@@ -282,19 +251,33 @@
           }
         }
       }
-
+      // BREED
+      let breed = '';
+      const breedKeys = ['breedname', 'breed name', 'breed'];
+      for (const key of breedKeys){
+        if (lower[key] != null){ breed = String(lower[key]).trim().toUpperCase(); break; }
+      }
+      if (!breed || BAD.has(breed)) continue;
+      // GENDER
+      let gender = '';
+      const genderKeys = ['animalgender', 'gender'];
+      for (const key of genderKeys){
+        if (lower[key] != null){
+          gender = String(lower[key]).trim().toUpperCase();
+          if (gender === 'M' || gender === 'F') break;
+        }
+      }
+      if (!gender || !['M', 'F'].includes(gender)) continue;
       // validate / normalize
       if (name) name = name.toUpperCase();
       if (!Number.isFinite(year) || year <= 0) continue;
       if (!name || BAD.has(name)) continue;
-      if (!Number.isFinite(zip)) continue; // we rely on zip for geo AND filter to NYC next
+      if (!Number.isFinite(zip)) continue;
       if (zip < 10000 || zip > 11699) continue; // keep plausible NYC
-
-      out.push({ year, name, zip });
+      out.push({ year, name, zip, breed, gender });
     }
     return out;
   }
-
   // Build aggregated name rows (year, name, count) from licenseRows
   function buildNameAgg(){
     const byYN = new Map(); // `${year}|${name}` -> count
@@ -307,7 +290,17 @@
       return { year: +yStr, name, count };
     }).sort((a,b)=> (a.year-b.year) || (a.name<b.name?-1:1));
   }
-
+  // Build breed aggregates
+  function buildBreedAgg() {
+    const agg = new Map(); // `${borough}|${breed}|${gender}` -> count
+    for (const r of licenseRows) {
+      if (r.year < 2020) continue; // Filter for recent data
+      const borough = boroughForZip(r.zip);
+      const key = `${borough}|${r.breed}|${r.gender}`;
+      agg.set(key, (agg.get(key) || 0) + 1);
+    }
+    return agg;
+  }
   // Build ZIP aggregates
   function buildZipAgg(){
     zipTotalsAll = new Map();
@@ -319,12 +312,10 @@
       zipTotalsByYear.set(r.year, m);
     }
   }
-
   function getZipCountsFor(yearOrNull){
     if (yearOrNull == null) return zipTotalsAll;
     return zipTotalsByYear.get(yearOrNull) || new Map();
   }
-
   // ---------- load ----------
   async function fetchCsvText(url){
     const r = await fetch(url);
@@ -336,7 +327,6 @@
       Papa.parse(text, { header:true, skipEmptyLines:true, complete:o=>res(o.data), error:rej });
     });
   }
-
   function buildTotals() {
     totals = new Map();
     for (const y of years) {
@@ -346,18 +336,18 @@
       );
     }
   }
-
   onMount(async ()=>{
     try{
       Plotly = (await import('plotly.js-dist-min')).default;
-
+      Chart = (await import('chart.js/auto')).default;
+      const { default: annotationPlugin } = await import('chartjs-plugin-annotation');
+      Chart.register(annotationPlugin);
       // Parse the single cleaned CSV
       const licenses = tidyCleaned(await parseCsvText(await fetchCsvText(CLEAN_URL)));
       if (!licenses.length){
-        errorMsg = 'Could not find usable (Year, Name, ZIP) in dog_names_cleaned.csv.';
+        errorMsg = 'Could not find usable (Year, Name, ZIP, Breed, Gender) in dog_names_cleaned.csv.';
       }
       licenseRows = licenses;
-
       // Build name aggregates for trends/leaderboard
       buildNameAgg();
       years = Array.from(new Set(licenseRows.map(r=>r.year))).sort((a,b)=>a-b);
@@ -368,31 +358,25 @@
         drawLine();
         drawBars();
       }
-
       // Build ZIP aggregates for treemap
       zipRows = licenseRows.map(({year,zip})=>({year,zip}));
       buildZipAgg();
       zipYears = Array.from(new Set(zipRows.map(d=>d.year))).sort((a,b)=>a-b);
       zipYear = zipYears.at(-1) ?? null;
-
       drawZipTreemap();
-
+      drawBreedChart();
     }catch(e){
       errorMsg = (errorMsg ? errorMsg + ' | ' : '') + `Failed to initialize: ${String(e?.message ?? e)}`;
     }
   });
-
   // redraws
   $: if (Plotly && rows.length && barYear) drawBars();
   // keep trend in sync with the Year Leaderboard selection
   $: if (Plotly && rows.length && barYear != null) drawLine();
-
   // treemap reacts to control changes
   $: { void zipOverall; void zipYear; void zipTopN; if (Plotly && zipTreeEl) drawZipTreemap(); }
-
   // guideline control for trend line
   function setCursorLine(y){ cursorYear = y; drawLine(); }
-
   // autoplay for leaderboard — updates both bars and line
   function playBars(){
     stopBars();
@@ -406,13 +390,11 @@
     }, 900);
   }
   function stopBars(){ if (timer){ clearInterval(timer); timer=null; } }
-
   // Treemap
   function drawZipTreemap(){
     if (!Plotly || !zipTreeEl) return;
     const counts = getZipCountsFor(zipOverall ? null : zipYear);
     if (!counts.size){ Plotly.purge(zipTreeEl); return; }
-
     const byBoro = new Map(); // boro -> [ [zip,count], ... ]
     for (const [zip, c] of counts){
       const b = boroughForZip(+zip);
@@ -423,17 +405,14 @@
       arr.sort((a,b)=>b[1]-a[1]);
       byBoro.set(b, arr.slice(0, Math.max(1, +zipTopN || 10)));
     }
-
     const labels = ['NYC'];
     const parents = [''];
     const values = [null];
     const markerColors = ['#ddd'];
-
     for (const [boro, arr] of byBoro){
       const sum = arr.reduce((s,[,c])=>s+c,0);
       labels.push(boro); parents.push('NYC'); values.push(sum);
       markerColors.push(BORO_COLORS[boro] || '#aaa');
-
       for (const [zip,cnt] of arr){
         labels.push(zip.toString());
         parents.push(boro);
@@ -441,7 +420,6 @@
         markerColors.push(BORO_COLORS[boro] || '#aaa');
       }
     }
-
     Plotly.newPlot(zipTreeEl, [{
       type: 'treemap',
       labels, parents, values,
@@ -454,18 +432,85 @@
       margin:{l:10,r:10,t:40,b:10}
     }, {displayModeBar:false});
   }
-</script>
+  // Breed chart
+  function drawBreedChart() {
+    if (!breedEl || !licenseRows.length) return;
+    const agg = buildBreedAgg();
+    const boroughs = ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"];
+    // Get top 5 breeds by total count
+    const breedCounts = new Map();
+    for (const [key, count] of agg) {
+      const [borough, breed, gender] = key.split('|');
+      breedCounts.set(breed, (breedCounts.get(breed) || 0) + count);
+    }
+    const topBreeds = Array.from(breedCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([breed]) => breed);
 
+    const datasets = [];
+    for (const breed of topBreeds) {
+      const baseHue = Math.random() * 360; // Unique hue for each breed
+      for (const [gender, lightness] of [['M', 55], ['F', 65]]) { // Male brighter, female less bright
+        const data = boroughs.map(borough => {
+          const key = `${borough}|${breed}|${gender}`;
+          return agg.get(key) || 0;
+        });
+        datasets.push({
+          label: `${breed} (${gender === 'M' ? 'Male' : 'Female'})`,
+          data,
+          backgroundColor: `hsl(${baseHue}, 70%, ${lightness}%)`,
+          stack: breed
+        });
+      }
+    }
+
+    const ctx = breedEl.getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: boroughs,
+        datasets
+      },
+      options: {
+        plugins: {
+          title: {
+            display: true,
+            text: "Top Dog Breeds by Borough and Gender",
+            font: { size: 18 }
+          },
+          legend: { position: "bottom" },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            title: { display: true, text: "Borough" }
+          },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            min: 0, // Explicitly set minimum to zero
+            ticks: {
+              stepSize: 500 // Force consistent step size to avoid interpolation
+            }
+          }
+        },
+        interaction: {
+          mode: "index",
+          intersect: true
+        }
+      }
+    });
+  }
+</script>
 <div class="container">
   <h1>Dogs population in NYC</h1>
   {#if errorMsg}
     <div class="card warn">{errorMsg}</div>
   {/if}
-
   <!-- Trend line + controls -->
   <section>
     <div class="card" bind:this={lineEl} style="height:520px;"></div>
-
     {#if years.length}
       <div class="card ctrl" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
         <div style="display:flex;gap:8px;align-items:center;">
@@ -473,7 +518,6 @@
           <input id="year" type="range" min={years[0]} max={years.at(-1)} step="1"
                  on:input={(e)=> setCursorLine(+e.currentTarget.value)} />
         </div>
-
         <label style="display:flex;gap:8px;align-items:center;">
           <input type="checkbox" bind:checked={showTotal} on:change={drawLine} />
           Show total licenses
@@ -482,7 +526,6 @@
           <input type="checkbox" bind:checked={showEvents} on:change={drawLine} />
           Show context events
         </label>
-
         {#each EVENTS as ev}
           <button
             class="chip"
@@ -499,17 +542,14 @@
       </div>
     {/if}
   </section>
-
   <!-- ZIP / Neighborhoods — TREEMAP Y -->
   <section class="card" style="margin-top:16px;">
     <h3 style="margin:0 0 8px;">Where are the dogs? (ZIPs & Boroughs)</h3>
-
     <div class="flex" style="align-items:center;">
       <label style="display:flex;gap:8px;align-items:center;">
         <input type="checkbox" bind:checked={zipOverall} on:change={drawZipTreemap} />
         Overall<br/>(all years)
       </label>
-
       <div style="display:flex;gap:8px;align-items:center;">
         <label for="zipYear">Year</label>
         <input id="zipYear" type="range"
@@ -519,26 +559,25 @@
                on:input={drawZipTreemap} />
         <div class="mono">{zipOverall ? 'All' : zipYear}</div>
       </div>
-
       <div style="display:flex;gap:8px;align-items:center;margin-left:auto;">
         <label for="zipTop">Top ZIPs<br/>per borough</label>
         <input id="zipTop" type="number" min="3" max="20" bind:value={zipTopN} on:input={drawZipTreemap} />
       </div>
     </div>
-
     <div class="card" bind:this={zipTreeEl} style="height:480px;margin-top:10px;"></div>
-
     <div class="legendBoro">
       {#each Object.entries(BORO_COLORS) as [b,c]}
         <span class="dot" style="--c:{c}"></span>{b}
       {/each}
     </div>
   </section>
-
+  <!-- Breed chart section -->
+  <section class="card" style="margin-top:16px;">
+    <canvas bind:this={breedEl} style="height:520px;"></canvas>
+  </section>
   <!-- Year leaderboard (names) -->
   <section class="card" style="margin-top:16px;">
     <h3 style="margin:0 0 6px;">Year Leaderboard</h3>
-
     <div class="flex">
       <div>
         <label for="yearSel">Year</label>
@@ -553,7 +592,6 @@
         <button on:click={stopBars} title="Stop">⏸</button>
       </div>
     </div>
-
     {#if barYear}
       {#if topKForYear(barYear, 6).length}
         {#key barYear}
@@ -573,7 +611,6 @@
               </div>
             {/each}
           </div>
-
           {#if topKForYear(barYear,6).length > 3}
             <div class="bench">
               {#each topKForYear(barYear,6).slice(3) as d (d.name)}
@@ -591,7 +628,6 @@
       {/if}
     {/if}
   </section>
-
   <!-- Top-N bars for same year (names) -->
   <section class="card" style="margin-top:12px;">
     <div class="flex">
@@ -603,180 +639,175 @@
     <div class="card" bind:this={barsEl} style="height:520px;margin-top:10px;"></div>
   </section>
 </div>
-
 <style>
   :global(:root){ --maxw: 1100px; --pad: 12px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   :global(body){ margin:0;
      color:#111;
-     background:#fff; 
+     background:#fff;
     }
   .container{ max-width:var(--maxw);
-     margin:0 auto; 
-    padding:24px var(--pad); 
+     margin:0 auto;
+    padding:24px var(--pad);
   }
-  h1{ 
+  h1{
     font-size:1.6rem;
-     margin:0 0 8px; 
+     margin:0 0 8px;
     }
-  .card{ 
-    background:#fff; 
-    border:1px solid #eee; 
+  .card{
+    background:#fff;
+    border:1px solid #eee;
     border-radius:12px; padding:16px;
-    box-shadow:0 1px 2px rgba(0,0,0,.04); 
+    box-shadow:0 1px 2px rgba(0,0,0,.04);
   }
-  .warn{ 
-    background:#fff5f5; 
+  .warn{
+    background:#fff5f5;
     border-color:#f0cccc; }
-  input,button{ 
+  input,button{
     font-size:14px;
    }
-  input{ 
+  input{
     min-height:36px;
-    padding:6px 8px; 
-    width:100%; 
-    box-sizing:border-box; 
+    padding:6px 8px;
+    width:100%;
+    box-sizing:border-box;
   }
-  button{ 
-    padding:8px 12px; 
-    border-radius:10px; 
-    border:1px solid #ddd; 
-    background:#fafafa; 
+  button{
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid #ddd;
+    background:#fafafa;
     cursor:pointer; }
-  button:hover{ 
-    background:#f0f0f0; 
+  button:hover{
+    background:#f0f0f0;
   }
-  .mono{ 
-    font-family: ui-monospace, Menlo, Consolas, monospace; 
-    color:#444; 
+  .mono{
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color:#444;
     margin-top:4px; }
-  .subtle{ color:#555; 
-    font-size:.9rem; 
+  .subtle{ color:#555;
+    font-size:.9rem;
   }
   .ctrl{ margin-top:10px;
    }
-  .chip{ 
-    background:#f2f4f7; 
-    border:1px solid #e5e7eb; 
+  .chip{
+    background:#f2f4f7;
+    border:1px solid #e5e7eb;
     border-radius:999px;
-    padding:2px 10px; 
-    font-size:12px; 
-    letter-spacing:.2px; 
-    color:var(--c); 
+    padding:2px 10px;
+    font-size:12px;
+    letter-spacing:.2px;
+    color:var(--c);
     cursor:pointer; }
   .chip[aria-pressed="true"]{ background:#eef2ff; border-color:#c7d2fe; }
-
-  .legendBoro{ 
+  .legendBoro{
     display:flex; gap:14px;
-    align-items:center; 
-    color:#444; 
+    align-items:center;
+    color:#444;
     flex-wrap:wrap; }
-  .dot{ 
-    width:10px; 
+  .dot{
+    width:10px;
     height:10px;
-    border-radius:999px; 
-    background:var(--c); 
-    display:inline-block; 
-    margin-right:6px; 
+    border-radius:999px;
+    background:var(--c);
+    display:inline-block;
+    margin-right:6px;
   }
-
   /* Podium (names) */
-  .podium{ 
-    display:grid; 
+  .podium{
+    display:grid;
     grid-template-columns: repeat(3, 1fr);
-    gap:14px; 
-    align-items:end; 
+    gap:14px;
+    align-items:end;
     margin-top:10px; }
   .place{
-     position:relative; 
-     text-align:center; 
-     padding:16px 10px 12px; 
-     border-radius:14px; border:1px solid #eee; 
-     box-shadow:0 1px 2px rgba(0,0,0,.04); 
-     overflow:hidden; 
+     position:relative;
+     text-align:center;
+     padding:16px 10px 12px;
+     border-radius:14px; border:1px solid #eee;
+     box-shadow:0 1px 2px rgba(0,0,0,.04);
+     overflow:hidden;
     }
-  .place::after{ 
-    content:''; 
-    position:absolute; 
-    inset:0; 
-    background: linear-gradient(180deg, color-mix(in oklab, var(--c) 12%, #fff) 0%, #fff 60%); 
-    opacity:.55; 
-    pointer-events:none; 
+  .place::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    background: linear-gradient(180deg, color-mix(in oklab, var(--c) 12%, #fff) 0%, #fff 60%);
+    opacity:.55;
+    pointer-events:none;
   }
   .r1{ transform: translateY(-6px); }
   .r2{ transform: translateY(6px); }
   .r3{ transform: translateY(12px); }
-  .trophy{ 
-    font-size:28px; 
-    line-height:1; 
-    position:absolute; 
-    top:-12px; left:50%; 
-    transform:translateX(-50%); 
-    z-index:2; 
+  .trophy{
+    font-size:28px;
+    line-height:1;
+    position:absolute;
+    top:-12px; left:50%;
+    transform:translateX(-50%);
+    z-index:2;
   }
-  .spark{ 
-    position:absolute; 
-    inset:4px 4px auto 4px; 
-    height:54px; 
-    width:140px; 
-    opacity:.25; 
-    z-index:1; 
+  .spark{
+    position:absolute;
+    inset:4px 4px auto 4px;
+    height:54px;
+    width:140px;
+    opacity:.25;
+    z-index:1;
   }
-  .spark path{ 
-    fill:none; 
-    stroke:var(--c); 
-    stroke-width:2; 
+  .spark path{
+    fill:none;
+    stroke:var(--c);
+    stroke-width:2;
   }
-  .dog{ 
-    font-size:46px; 
-    margin-top:6px; 
-    position:relative; 
-    z-index:2; 
+  .dog{
+    font-size:46px;
+    margin-top:6px;
+    position:relative;
+    z-index:2;
   }
-  .rank{ 
-    font-weight:700; 
-    margin-top:6px; 
-    letter-spacing:.3px; 
-    position:relative; 
-    z-index:2; 
+  .rank{
+    font-weight:700;
+    margin-top:6px;
+    letter-spacing:.3px;
+    position:relative;
+    z-index:2;
   }
-  .pname{ 
-    font-weight:700; 
-    margin-top:2px; 
-    position:relative; 
-    z-index:2; 
+  .pname{
+    font-weight:700;
+    margin-top:2px;
+    position:relative;
+    z-index:2;
   }
-  .pcount{ 
-    color:#555; 
-    font-size:.9rem; 
-    margin-top:2px; 
-    position:relative; 
-    z-index:2; 
+  .pcount{
+    color:#555;
+    font-size:.9rem;
+    margin-top:2px;
+    position:relative;
+    z-index:2;
   }
-
-  .bench{ 
-    display:grid; 
-    grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); 
-    gap:10px; 
+  .bench{
+    display:grid;
+    grid-template-columns: repeat(auto-fill,minmax(220px,1fr));
+    gap:10px;
     margin-top:12px; }
-  .benchItem{ display:flex; 
+  .benchItem{ display:flex;
     align-items:center;
-    gap:10px; 
-    padding:10px; border:1px dashed #eee; 
-    border-radius:10px; 
+    gap:10px;
+    padding:10px; border:1px dashed #eee;
+    border-radius:10px;
   }
-  .cry{ font-size:22px; 
+  .cry{ font-size:22px;
   }
-  .bname{ 
-    font-weight:600; 
+  .bname{
+    font-weight:600;
     color:var(--c);
    }
-  .bcount{ 
-    margin-left:auto; 
-    color:#555; 
+  .bcount{
+    margin-left:auto;
+    color:#555;
     font-variant-numeric: tabular-nums; }
-
-  .flex{ 
-    display:flex; gap:12px; 
-    align-items:flex-end; 
+  .flex{
+    display:flex; gap:12px;
+    align-items:flex-end;
     flex-wrap:wrap; }
 </style>
