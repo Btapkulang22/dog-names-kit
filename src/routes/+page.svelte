@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import Papa from 'papaparse';
+  import Chart from "chart.js/auto"
   // One CSV for everything
   const CLEAN_URL = '/dog_names_cleaned.csv';
   // status
@@ -12,7 +13,6 @@
   let totals = new Map(); // year -> total count
   // charts
   let Plotly = null;
-  let Chart = null;
   let lineEl;
   let barsEl;
   let breedEl;
@@ -339,9 +339,6 @@
   onMount(async ()=>{
     try{
       Plotly = (await import('plotly.js-dist-min')).default;
-      Chart = (await import('chart.js/auto')).default;
-      const { default: annotationPlugin } = await import('chartjs-plugin-annotation');
-      Chart.register(annotationPlugin);
       // Parse the single cleaned CSV
       const licenses = tidyCleaned(await parseCsvText(await fetchCsvText(CLEAN_URL)));
       if (!licenses.length){
